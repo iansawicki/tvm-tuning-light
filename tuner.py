@@ -49,13 +49,6 @@ if not os.path.exists("tuning_logs"):
 MODELS = Path("models")
 TUNING_LOGS = Path("tuning_logs")
     
-# Extract tasks from the graph
-def extract_tasks(mod, params, target, target_host,ops=None):
-    # Extract tasks from the graph
-    print("Extract tasks...")
-    tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params, target_host=target_host,ops=ops)
-    return tasks
-
 def create_logging_file(model_name, tuning_method="autotvm"):
     
     # Build tuning log path name
@@ -67,9 +60,12 @@ def create_logging_file(model_name, tuning_method="autotvm"):
 
 def extract_graph_tasks(onnx_model, target="llvm",*args, **kwargs):
     # Extract tasks from the graph
-    mod, params = relay.frontend.from_onnx(onnx_model, shape=inputs, dtype={input_name: input_dtype})
+    mod, params = relay.frontend.from_onnx(onnx_model, shape=inputs, dtype={input_name: input_dtype},opset=11)
     print("Extract tasks...")
-    tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params)
+    if kwargs["ops"] is not None:
+        tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params, ops=kwargs["ops"])
+    else:
+        tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params)
     return tasks
 
 def time_it(func):
@@ -150,6 +146,8 @@ if __name__ == "__main__":
     parser.add_argument("--num-threads", type=int, default=4, help="Number of threads")
     # Compute time it takes to tune each task
     parser.add_argument("--time-tasks", action="store_true", help="Compute time it takes to tune each task")
+    # Set tuning operators to be used in tasks
+    parser.add_argument("--ops", type=str, default=None, help="Tuning operators")
     
     args = parser.parse_args()
     
@@ -178,6 +176,10 @@ if __name__ == "__main__":
         exit(1)
         
     # Enter program - perform basic checks
+    
+    if args.ops:
+        ops = args.ops.split(",")
+        ops = (relay.op.get(op) for op in ops)
         
 
     model_path = MODELS / args.model_path
@@ -220,7 +222,7 @@ if __name__ == "__main__":
     
     # Get module and params from the model
     print("Extracting module and params from ONNX model...")
-    tasks = extract_graph_tasks(onnx_model, target=args.target, target_host=args.target_host)
+    tasks = extract_graph_tasks(onnx_model, target=args.target, target_host=args.target_host,ops=ops)
     print("Number of tasks: ", len(tasks))
     print("Tasks: ", tasks)
     
