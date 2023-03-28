@@ -192,10 +192,11 @@ if __name__ == "__main__":
     
     ops = args.ops.split(",")
     if len(ops) > 1:
-        ops = (relay.op.get(op) for op in ops)
+        ops = tuple([relay.op.get(op) for op in ops])
+        
     else:
         ops = ""
-        
+                
     model_path = args.model_path
     print("Using model from: ", model_path)
     
