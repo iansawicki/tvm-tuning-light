@@ -9,6 +9,22 @@ from datetime import datetime as dt
 import platform
 import time
 
+#Set parent base directory
+BASE_PATH = Path(__file__).parent
+
+# Create /models directory if it doesn't exist
+if not os.path.exists("models"):
+    os.makedirs("models")
+    
+# Create /tuning_logs directory if it doesn't exist
+if not os.path.exists("tuning_logs"):
+    os.makedirs("tuning_logs")
+    
+    
+# Default path to models
+MODELS = BASE_PATH / "models"
+TUNING_LOGS = BASE_PATH / "tuning_logs"
+
 
 # Check TVM version 
 def check_tvm_version():
@@ -31,24 +47,11 @@ rpc_runner = dict(host="127.0.0.1",
 # Default tuning options
 early_stopping = 300
 tuner =  tvm.autotvm.tuner.XGBTuner
-num_threads = 4
-os.environ["TVM_NUM_THREADS"] = str(num_threads)
-tuner_settings = dict(loss_type="rank", feature_type="know")
+#num_threads = 4
+#os.environ["TVM_NUM_THREADS"] = str(num_threads)
+tuner_settings = dict(loss_type="rank", feature_type="knob")
 
-
-# Create /models directory if it doesn't exist
-if not os.path.exists("models"):
-    os.makedirs("models")
-    
-# Create /tuning_logs directory if it doesn't exist
-if not os.path.exists("tuning_logs"):
-    os.makedirs("tuning_logs")
-    
-    
-# Default path to models
-MODELS = Path("models")
-TUNING_LOGS = Path("tuning_logs")
-    
+  
 def create_logging_file(model_name, tuning_method="autotvm"):
     
     # Build tuning log path name
@@ -58,11 +61,11 @@ def create_logging_file(model_name, tuning_method="autotvm"):
     logfile = TUNING_LOGS / f'{tuning_method}_{model_name}_{platform_arch}_{vendor_name}_{epoch_time}.log'
     return logfile
 
-def extract_graph_tasks(onnx_model, target="llvm",*args, **kwargs):
+def extract_graph_tasks(onnx_model, target="llvm", *args, **kwargs):
     # Extract tasks from the graph
     mod, params = relay.frontend.from_onnx(onnx_model, shape=inputs, dtype={input_name: input_dtype},opset=11)
     print("Extract tasks...")
-    if kwargs["ops"] is not None:
+    if 'ops' in kwargs.keys() and kwargs['ops'] != '':
         tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params, ops=kwargs["ops"])
     else:
         tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params)
@@ -74,7 +77,6 @@ def time_it(func):
         result = func(*args, **kwargs)
         end = time.time()
         print(f"Function {func.__name__} took {end-start} seconds to execute.")
-        print("Total thread count: ", num_threads)
         return result
     return wrapper
     
@@ -122,12 +124,16 @@ if __name__ == "__main__":
     parser.add_argument("--version", action="store_true", help="Check TVM version")
     # Download toy model
     parser.add_argument("--download-model", action="store_true", help="Download a toy model")
+    # Speficy model to download
+    parser.add_argument("--download-model-name", type=str, default="resnet50", help="Model to download")
     # Set path to model
     parser.add_argument("--model-path", type=str, help="Path to model")
     # Set model name
     parser.add_argument("--model-name", type=str, help="Name of model")
     # Set batch_size, default is 1
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size")
+    # Override input shapes
+    parser.add_argument("--insert-shapes", type=str, help="Override input shapes")
     # Set number of trials, default is 1000
     parser.add_argument("--trials", type=int, default=1000, help="Number of trials")
     # Set number of threads, default is 1
@@ -147,7 +153,7 @@ if __name__ == "__main__":
     # Compute time it takes to tune each task
     parser.add_argument("--time-tasks", action="store_true", help="Compute time it takes to tune each task")
     # Set tuning operators to be used in tasks
-    parser.add_argument("--ops", type=str, default=None, help="Tuning operators")
+    parser.add_argument("--ops", type=str, default="", help="Tuning operators")
     
     args = parser.parse_args()
     
@@ -156,11 +162,16 @@ if __name__ == "__main__":
         exit(0)
         
     if args.download_model:
-        # Download a Resnet50 Model from ONNX Model Zoo
-        
+        RESNET = "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v2-7.onnx"
+        MNIST = "https://github.com/onnx/models/raw/main/vision/classification/mnist/model/mnist-1.onnx"        
         # Download the model
-        model_url = "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v2-7.onnx"
-        subprocess.run(["wget", "-O", "models/resnet50-v2-7.onnx", model_url])
+        if args.download_model_name == "resnet50":
+            model_url = RESNET
+            download_model_name = MODELS / "resnet50-v2-7.onnx"
+        elif args.download_model_name == "mnist":
+            model_url = MNIST
+            download_model_name = MODELS / "mnist-1.onnx"
+        subprocess.run(["wget", "-O", download_model_name, model_url])
         
     # Check model_name is set
     if not args.model_name:
@@ -177,12 +188,13 @@ if __name__ == "__main__":
         
     # Enter program - perform basic checks
     
-    if args.ops:
-        ops = args.ops.split(",")
+    ops = args.ops.split(",")
+    if len(ops) > 1:
         ops = (relay.op.get(op) for op in ops)
+    else:
+        ops = ""
         
-
-    model_path = MODELS / args.model_path
+    model_path = args.model_path
     print("Using model from: ", model_path)
     
     model_name = args.model_name
@@ -210,6 +222,10 @@ if __name__ == "__main__":
     W = args.img_size
     C = 3
     input_shape = (batch_size, C, H, W)
+    if args.insert_shapes:
+        input_shape = args.insert_shapes.split(",")
+        input_shape = tuple([int(i) for i in input_shape])
+
     input_dtype = "float32"
     input_name = "input"
     inputs={onnx_model.graph.input[0].name: input_shape}
@@ -220,14 +236,17 @@ if __name__ == "__main__":
     logfile_name = create_logging_file(model_name, tuning_method=args.tuning_mode)
     print(logfile_name)
     
+    print(inputs)
+    print(ops)
+    
     # Get module and params from the model
     print("Extracting module and params from ONNX model...")
-    tasks = extract_graph_tasks(onnx_model, target=args.target, target_host=args.target_host,ops=ops)
-    print("Number of tasks: ", len(tasks))
-    print("Tasks: ", tasks)
+    tasks = extract_graph_tasks(onnx_model, ops=ops, target=args.target, target_host=args.target_host)
+    #print("Number of tasks: ", len(tasks))
+    #print("Tasks: ", tasks)
     
     # Runing tuning tasks
     print("Tuning...")
-    tune_model_tasks(tasks, logfile_name, device_key, num_threads=None, num_measure_trials=args.trials)
+    tune_model_tasks(tasks, logfile_name, device_key, num_measure_trials=args.trials)
     
         
