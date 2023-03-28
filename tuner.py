@@ -59,7 +59,7 @@ def create_logging_file(model_name, tuning_method="autotvm"):
     platform_arch = platform.machine()
     vendor_name = platform.node()
     logfile = TUNING_LOGS / f'{tuning_method}_{model_name}_{platform_arch}_{vendor_name}_{epoch_time}.log'
-    return logfile
+    return str(logfile)
 
 def extract_graph_tasks(onnx_model, target="llvm", *args, **kwargs):
     # Extract tasks from the graph
@@ -84,18 +84,20 @@ def time_it(func):
 @time_it
 def tune_model_tasks(tasks, logfile_name, device_key , *args, **kwargs):
      # create tmp log file
-    tmp_log_file = str(logfile_name) + ".tmp"
+    logfile_name = str(logfile_name)
+    tmp_log_file = logfile_name + ".tmp"
     if os.path.exists(tmp_log_file):
         os.remove(tmp_log_file)
+    print(tmp_log_file)
+    
+    # Create builder, runner, and measure_option
+    builder = autotvm.LocalBuilder()
+    runner=autotvm.RPCRunner(device_key,**rpc_runner)
+    measure_option = autotvm.measure_option(builder=builder, runner=runner)
     
     # Tune tasks
     for i, task in enumerate(reversed(tasks)):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
-        
-        # Create builder, runner, and measure_option
-        builder = autotvm.LocalBuilder()
-        runner=autotvm.RPCRunner(device_key,**rpc_runner)
-        measure_option = autotvm.measure_option(builder=builder, runner=runner)
         
         # Create tuner_obj
         if num_threads:
@@ -236,13 +238,10 @@ if __name__ == "__main__":
     logfile_name = create_logging_file(model_name, tuning_method=args.tuning_mode)
     print(logfile_name)
     
-    print(inputs)
-    print(ops)
-    
     # Get module and params from the model
     print("Extracting module and params from ONNX model...")
     tasks = extract_graph_tasks(onnx_model, ops=ops, target=args.target, target_host=args.target_host)
-    #print("Number of tasks: ", len(tasks))
+    print("Number of tasks: ", len(tasks))
     #print("Tasks: ", tasks)
     
     # Runing tuning tasks
