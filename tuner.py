@@ -47,7 +47,7 @@ rpc_runner = dict(host="127.0.0.1",
               number=1,
               repeat=None,
               min_repeat_ms=300,
-              enable_cpu_cache_flush=True)
+              enable_cpu_cache_flush=False)
 
 # What's the difference between number and repeat?
 
@@ -151,7 +151,7 @@ def tune_model_tasks_autoscheduler(tasks, task_weights, logfile_name, device_key
         num_measure_trials=num_measure_trials,
         runner=runner,
         early_stopping=early_stopping,
-        measure_callbacks=[auto_scheduler.RecordToFile(tmp_log_file)]
+        measure_callbacks=[auto_scheduler.RecordToFile(tmp_log_file)],
         verbose=2
     )
     tuner = auto_scheduler.TaskScheduler(tasks, task_weights)
