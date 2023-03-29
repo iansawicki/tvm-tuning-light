@@ -82,12 +82,7 @@ def extract_graph_tasks_autoscheduler(onnx_model, target="llvm", *args, **kwargs
     # Extract tasks from the graph
     mod, params = relay.frontend.from_onnx(onnx_model, shape=inputs, dtype={input_name: input_dtype},opset=11)
     print("Extract tasks...")
-    if 'ops' in kwargs.keys() and kwargs['ops'] != '':
-        tasks, task_weights = auto_scheduler.extract_tasks(mod["main"], params, target=target, ops=kwargs["ops"])
-        print("Extracting tasks for the following ops: ", kwargs["ops"])
-    else:
-        tasks, task_weights = auto_scheduler.extract_tasks(mod["main"], params, target=target)
-        
+    tasks, task_weights = auto_scheduler.extract_tasks(mod["main"], params, target=target)
     return tasks, task_weights
 
 def time_it(func):
