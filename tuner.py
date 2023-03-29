@@ -3,7 +3,7 @@ import os
 import argparse
 import subprocess
 from pathlib import Path
-from tvm import relay, autotvm
+from tvm import relay, autotvm, auto_scheduler
 import onnx
 from datetime import datetime as dt
 import platform
@@ -36,19 +36,24 @@ opt_level = 3
 verbose = True
 
 # Default RPC options
+# number: is the number of times to run the generated code for taking an average
+# and repeat: is the number of times to repeat the measurement. 
+# The generated code will run (1 + number x repeat) times, where the first “1” is warm up and will be discarded.
+
+# enable_cpu_cache_flush: is a flag to enable cache flush before each measurement.
 rpc_runner = dict(host="127.0.0.1",
               port=9190,
-              timeout=30,
-              repeat=1,
-              number=5,
-              min_repeat_ms=200,
+              timeout=1000,
+              number=1,
+              repeat=None,
+              min_repeat_ms=300,
               enable_cpu_cache_flush=True)
 
+# What's the difference between number and repeat?
+
 # Default tuning options
-early_stopping = 300
+early_stopping = 300 # When to stop tuning when not finding better results
 tuner =  tvm.autotvm.tuner.XGBTuner
-#num_threads = 4
-#os.environ["TVM_NUM_THREADS"] = str(num_threads)
 tuner_settings = dict(loss_type="rank", feature_type="knob")
 
   
@@ -67,9 +72,23 @@ def extract_graph_tasks(onnx_model, target="llvm", *args, **kwargs):
     print("Extract tasks...")
     if 'ops' in kwargs.keys() and kwargs['ops'] != '':
         tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params, ops=kwargs["ops"])
+        print("Extracting tasks for the following ops: ", kwargs["ops"])
     else:
         tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params)
+        
     return tasks
+
+def extract_graph_tasks_autoscheduler(onnx_model, target="llvm", *args, **kwargs):
+    # Extract tasks from the graph
+    mod, params = relay.frontend.from_onnx(onnx_model, shape=inputs, dtype={input_name: input_dtype},opset=11)
+    print("Extract tasks...")
+    if 'ops' in kwargs.keys() and kwargs['ops'] != '':
+        tasks, task_weights = auto_scheduler.extract_tasks(mod["main"], params, target=target, ops=kwargs["ops"])
+        print("Extracting tasks for the following ops: ", kwargs["ops"])
+    else:
+        tasks, task_weights = auto_scheduler.extract_tasks(mod["main"], params, target=target)
+        
+    return tasks, task_weights
 
 def time_it(func):
     def wrapper(*args, **kwargs):
@@ -91,7 +110,7 @@ def tune_model_tasks(tasks, logfile_name, device_key , *args, **kwargs):
     print(tmp_log_file)
     
     # Create builder, runner, and measure_option
-    builder = autotvm.LocalBuilder()
+    builder = autotvm.LocalBuilder(timeout=10)
     runner=autotvm.RPCRunner(device_key,**rpc_runner)
     measure_option = autotvm.measure_option(builder=builder, runner=runner)
     
@@ -100,8 +119,6 @@ def tune_model_tasks(tasks, logfile_name, device_key , *args, **kwargs):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
         
         # Create tuner_obj
-        if num_threads:
-            tuner_settings["num_threads"] = num_threads
         tuner_obj = tuner(task, **tuner_settings)
 
         # Process_tuning
@@ -110,6 +127,7 @@ def tune_model_tasks(tasks, logfile_name, device_key , *args, **kwargs):
             n_trial=tsk_trial,
             early_stopping=early_stopping,
             measure_option=measure_option,
+            verbose=verbose,
             callbacks=[
                 autotvm.callback.progress_bar(tsk_trial, prefix=prefix),
                 autotvm.callback.log_to_file(tmp_log_file),
@@ -118,6 +136,32 @@ def tune_model_tasks(tasks, logfile_name, device_key , *args, **kwargs):
     # pick best records to a cache file
     autotvm.record.pick_best(tmp_log_file, logfile_name)
     os.remove(tmp_log_file)
+    
+def tune_model_tasks_autoscheduler(tasks, task_weights, logfile_name, device_key , *args, **kwargs):
+    # create tmp log file
+    logfile_name = str(logfile_name)
+    tmp_log_file = logfile_name + ".tmp"
+    if os.path.exists(tmp_log_file):
+        os.remove(tmp_log_file)
+    print(tmp_log_file)
+    
+    # Create runner for auto_scheduler
+    runner = auto_scheduler.RPCRunner(device_key,**rpc_runner)
+    tuning_options = auto_scheduler.TuningOptions(
+        num_measure_trials=num_measure_trials,
+        runner=runner,
+        early_stopping=early_stopping,
+        measure_callbacks=[auto_scheduler.RecordToFile(tmp_log_file)]
+        verbose=2
+    )
+    tuner = auto_scheduler.TaskScheduler(tasks, task_weights)
+    tuner.tune(tuning_options)
+    
+    # pick best records to a cache file
+    auto_scheduler.ApplyHistoryBest(tmp_log_file).to_file(logfile_name)
+    os.remove(tmp_log_file)
+   
+    
 
 if __name__ == "__main__":
     # Parse arguments
@@ -206,11 +250,6 @@ if __name__ == "__main__":
     device_key = args.device_key
     print("Using device key: ", device_key)
     
-    num_threads = args.num_threads
-    os.environ["TVM_NUM_THREADS"] = str(num_threads)
-    cmd = "echo $TVM_NUM_THREADS"
-    print("TVM_NUM_THREADS: ", subprocess.check_output(cmd, shell=True).decode("utf-8"))
-    
     target = args.target
     print("Target device: ", target)
         
@@ -235,18 +274,39 @@ if __name__ == "__main__":
     print("The input shape is: ", input_shape)
     
     # Create logging file
-    print("Tuning mode: ", args.tuning_mode)
     logfile_name = create_logging_file(model_name, tuning_method=args.tuning_mode)
-    print(logfile_name)
     
-    # Get module and params from the model
-    print("Extracting module and params from ONNX model...")
-    tasks = extract_graph_tasks(onnx_model, ops=ops, target=args.target, target_host=args.target_host)
-    print("Number of tasks: ", len(tasks))
-    #print("Tasks: ", tasks)
+    if args.tuning_mode=="autotvm":
     
-    # Runing tuning tasks
-    print("Tuning...")
-    tune_model_tasks(tasks, logfile_name, device_key, num_measure_trials=args.trials)
+      
+        print("Tuning mode: ", args.tuning_mode)
+        print(logfile_name)
+        
+        # Get module and params from the model
+        print("Extracting module and params from ONNX model...")
+        tasks = extract_graph_tasks(onnx_model, ops=ops, target=args.target, target_host=args.target_host)
+        print("Number of tasks: ", len(tasks))
+        #print("Tasks: ", tasks)
+        
+        # Runing tuning tasks
+        print("Tuning...")
+        tune_model_tasks(tasks, logfile_name, device_key, num_measure_trials=args.trials)
+        
+    elif args.tuning_mode=="autoscheduler":
+        print("Tuning mode: ", args.tuning_mode)
+        print(logfile_name)
+        
+        # Get module and params from the model
+        print("Extracting module and params from ONNX model...")
+        tasks, task_weights = extract_graph_tasks_autoscheduler(onnx_model, ops=ops, target=args.target, target_host=args.target_host)
+        print("Number of tasks: ", len(tasks))
+        #print("Tasks: ", tasks)
+        
+        # Run tuning tasks
+        print("Tuning...")
+        tune_model_tasks_autoscheduler(tasks, task_weights, logfile_name, device_key, num_measure_trials=args.trials)
+        
+        
+    
     
         
