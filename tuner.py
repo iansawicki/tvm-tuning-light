@@ -47,8 +47,6 @@ rpc_runner = dict(host="127.0.0.1",
 # Default tuning options
 early_stopping = 300
 tuner =  tvm.autotvm.tuner.XGBTuner
-#num_threads = 4
-#os.environ["TVM_NUM_THREADS"] = str(num_threads)
 tuner_settings = dict(loss_type="rank", feature_type="knob")
 
   
@@ -67,8 +65,10 @@ def extract_graph_tasks(onnx_model, target="llvm", *args, **kwargs):
     print("Extract tasks...")
     if 'ops' in kwargs.keys() and kwargs['ops'] != '':
         tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params, ops=kwargs["ops"])
+        print("Extracting tasks for the following ops: ", kwargs["ops"])
     else:
         tasks = autotvm.task.extract_from_program(mod["main"], target=target, params=params)
+        
     return tasks
 
 def time_it(func):
@@ -100,8 +100,6 @@ def tune_model_tasks(tasks, logfile_name, device_key , *args, **kwargs):
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
         
         # Create tuner_obj
-        if num_threads:
-            tuner_settings["num_threads"] = num_threads
         tuner_obj = tuner(task, **tuner_settings)
 
         # Process_tuning
@@ -205,11 +203,6 @@ if __name__ == "__main__":
     
     device_key = args.device_key
     print("Using device key: ", device_key)
-    
-    num_threads = args.num_threads
-    os.environ["TVM_NUM_THREADS"] = str(num_threads)
-    cmd = "echo $TVM_NUM_THREADS"
-    print("TVM_NUM_THREADS: ", subprocess.check_output(cmd, shell=True).decode("utf-8"))
     
     target = args.target
     print("Target device: ", target)
