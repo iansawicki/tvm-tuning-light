@@ -17,4 +17,4 @@ echo "Target: $TARGET"
 
 # Check with user before continuing
 read -p "Continue? (y/n) " -n 1 -r
-python tuner.py --model-name=$MODEL_NAME --model-path=$MODEL_PATH --device-key=$DEVICE_KEY --target=$TARGET --tuning-mode=$TUNING_MODE
+python tuner.py --model-name=$MODEL_NAME --model-path=$MODEL_PATH --device-key=$DEVICE_KEY --target=$TARGET
